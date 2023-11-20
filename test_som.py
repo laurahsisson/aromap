@@ -6,17 +6,21 @@ import unittest
 # Testing by using an iterative implementation.
 class IterativeSOM(object):
 
-    def __init__(self, som, is_cyclic):
-        self.models = som.models
-        self.map_idx = som.map_idx
-        self.width = som.width
-        self.height = som.height
-        self.gauss = som.gauss
+    def __init__(self, iterative, wrapping):
+        self.models = iterative.models
+        self.map_idx = iterative.map_idx
+        self.width = iterative.width
+        self.height = iterative.height
+        self.gauss = iterative.gauss
 
-        if is_cyclic:
-            self.distance_fn = self.__cyclic_distance
-        else:
+        if wrapping == som.WrappingMode.FLAT:
             self.distance_fn = self.__flat_distance
+        if wrapping == som.WrappingMode.TOROIDAL:
+            self.use_sphere = False
+            self.distance_fn = self.__spherical_distance
+        else:
+            self.use_sphere = True
+            self.distance_fn = self.__spherical_distance
 
     def get_activations(self, encoding):
         # Activation is 1 / Euclidian(models, encoding).
@@ -48,12 +52,15 @@ class IterativeSOM(object):
 
         return x_mj
 
-    def __cyclic_distance(self, p1, p2):
+    def __spherical_distance(self, p1, p2):
         eye = [0, 0]
         flip_x = [self.width, 0]
         flip_y = [0, self.height]
         # To change this to a toroidal SOM, flip_xy should be removed.
-        flip_xy = [self.width, self.height]
+        if self.use_sphere:
+            flip_xy = [self.width, self.height]
+        else:
+            flip_xy = [0,0]
         dist_all = []
         for f in [eye, flip_x, flip_y, flip_xy]:
             for sgn in [1, -1]:
@@ -101,29 +108,29 @@ class IterativeSOM(object):
 
 class TestBatchSOM(unittest.TestCase):
 
-    def __make_test(self, is_cyclic):
-        batch_som = som.SOM((2, 1, 10), is_cyclic)
-        iterative = IterativeSOM(batch_som, is_cyclic)
+    def __make_test(self, wrapping):
+        batch_som = som.SOM((2, 1, 10), wrapping)
+        iterative = IterativeSOM(batch_som, wrapping)
         batch_encodings = torch.randint(high=10, size=(60, 10)).float()
         # bmus are selected randomly, so we inject them here
         bmus = torch.cat([batch_som.get_bmu(e) for e in batch_encodings])
         return batch_som, iterative, batch_encodings, bmus
 
     def test_update_factor(self):
-        for is_cyclic in [True, False]:
-            with self.subTest(is_cyclic=is_cyclic):
+        for wrapping in list(som.WrappingMode):
+            with self.subTest(wrapping=wrapping):
                 batch_som, iterative, batch_encodings, bmus = self.__make_test(
-                    is_cyclic)
+                    wrapping)
 
                 h_ij = batch_som.update_factor()
                 h_ij_expected = iterative.update_factor()
                 self.assertTrue(torch.isclose(h_ij, h_ij_expected).all())
 
     def test_update_factor_symmetric(self):
-        for is_cyclic in [True, False]:
-            with self.subTest(is_cyclic=is_cyclic):
+        for wrapping in list(som.WrappingMode):
+            with self.subTest(wrapping=wrapping):
                 batch_som, iterative, batch_encodings, bmus = self.__make_test(
-                    is_cyclic)
+                    wrapping)
 
                 h_ij = batch_som.update_factor()
                 h_ij_expected = iterative.update_factor()
@@ -133,10 +140,10 @@ class TestBatchSOM(unittest.TestCase):
                                          h_ij_expected[j][i])
 
     def test_mean_encoding_by_bmu(self):
-        for is_cyclic in [True, False]:
-            with self.subTest(is_cyclic=is_cyclic):
+        for wrapping in list(som.WrappingMode):
+            with self.subTest(wrapping=wrapping):
                 batch_som, iterative, batch_encodings, bmus = self.__make_test(
-                    is_cyclic)
+                    wrapping)
 
                 x_mj = batch_som.mean_encoding_by_bmu(batch_encodings, bmus)
                 x_mj_expected = iterative.mean_encoding_by_bmu(
@@ -144,10 +151,10 @@ class TestBatchSOM(unittest.TestCase):
                 self.assertTrue(torch.isclose(x_mj, x_mj_expected).all())
 
     def test_batch_update_step(self):
-        for is_cyclic in [True, False]:
-            with self.subTest(is_cyclic=is_cyclic):
+        for wrapping in list(som.WrappingMode):
+            with self.subTest(wrapping=wrapping):
                 batch_som, iterative, batch_encodings, bmus = self.__make_test(
-                    is_cyclic)
+                    wrapping)
 
                 bse = batch_som.batch_update_step(batch_encodings, bmus)
                 bse_expected = iterative.batch_update_step(

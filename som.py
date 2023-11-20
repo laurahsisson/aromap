@@ -2,11 +2,13 @@ import torch
 import numpy as np
 import scipy
 import utils
+import enum
 
+WrappingMode = enum.Enum('WrappingMode', ['FLAT', 'TOROIDAL', 'SPHERICAL'])
 
 class SOM(object):
 
-    def __init__(self, shape, is_cyclic, gauss=10, decay=.99, use_onehot=True):
+    def __init__(self, shape, wrapping, gauss=10, decay=.99, use_onehot=True):
 
         if not hasattr(shape, '__len__') or len(shape) != 3:
             raise TypeError(
@@ -35,10 +37,10 @@ class SOM(object):
         self.models = utils.flatten(self.models)
         self.map_idx = utils.get_idx_grid(self.width, self.height, 1)
 
-        if is_cyclic:
-            self.inter_model_distances = self.__get_cyclic_distances()
-        else:
+        if wrapping == WrappingMode.FLAT:
             self.inter_model_distances = self.__get_flat_distances()
+        else:
+            self.inter_model_distances = self.__get_cyclic_distances(wrapping)
 
     def do_decay(self):
         # From the author:
@@ -95,14 +97,18 @@ class SOM(object):
         xy_dist = self.map_idx.unsqueeze(0) - self.map_idx.unsqueeze(1)
         return torch.sqrt(torch.sum(torch.square(xy_dist), dim=-1))
 
-    def __get_cyclic_distances(self):
+    def __get_cyclic_distances(self,wrapping):
         # This is only computed once, so we could cache it if we wanted.
         # Distance from each node to every other node
         eye = [0, 0]
         flip_x = [self.width, 0]
         flip_y = [0, self.height]
         # To change this to a toroidal SOM, flip_xy should be removed.
-        flip_xy = [self.width, self.height]
+        if wrapping == WrappingMode.SPHERICAL:
+            flip_xy = [self.width, self.height]
+        else:
+            flip_xy = [0, 0]
+
         dist_all = []
         for f in [eye, flip_x, flip_y, flip_xy]:
             for sgn in [1, -1]:
@@ -148,7 +154,7 @@ class SOM(object):
         utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
 
         activations = self.get_activations(encoding)
-        fine_grid = get_idx_grid(self.width, self.height, step)
+        fine_grid = utils.get_idx_grid(self.width, self.height, step)
         assert len(activations.shape) == 1
         fine_act = scipy.interpolate.griddata(self.map_idx.numpy(),
                                               activations.numpy(),
@@ -161,10 +167,6 @@ class SOM(object):
         assert torch.all(fine_grid[-1] == self.map_idx[-1])
 
         return fine_grid, torch.FloatTensor(fine_act)
-
-
-# fidx,fa = interpolate_activation(.1,all_activations[0])
-# fidx.shape,fa.shape
 
 
 def test():

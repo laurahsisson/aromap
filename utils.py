@@ -4,7 +4,6 @@ import torch
 def flatten(mtrx):
     return mtrx.reshape((mtrx.shape[0] * mtrx.shape[1], -1)).squeeze()
 
-
 def get_idx_grid(width, height, step):
     x_idx, y_idx = torch.meshgrid(torch.arange(start=0,
                                                end=width - 1 + step,
