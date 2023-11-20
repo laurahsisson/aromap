@@ -6,10 +6,10 @@ def flatten(mtrx):
 
 def get_idx_grid(width, height, step):
     x_idx, y_idx = torch.meshgrid(torch.arange(start=0,
-                                               end=width - 1 + step,
+                                               end=width - 1 + step - 1e-5,
                                                step=step),
                                   torch.arange(start=0,
-                                               end=height - 1 + step,
+                                               end=height - 1 + step - 1e-5,
                                                step=step),
                                   indexing='ij')
     grid_idx = torch.stack([x_idx, y_idx], dim=-1)

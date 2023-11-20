@@ -103,14 +103,15 @@ class SOM(object):
         eye = [0, 0]
         flip_x = [self.width, 0]
         flip_y = [0, self.height]
-        # To change this to a toroidal SOM, flip_xy should be removed.
+        
         if wrapping == WrappingMode.SPHERICAL:
             flip_xy = [self.width, self.height]
+            flip_yx = [-self.width, self.height]
         else:
-            flip_xy = [0, 0]
-
+            flip_xy = [0,0]
+            flip_yx = [0,0]
         dist_all = []
-        for f in [eye, flip_x, flip_y, flip_xy]:
+        for f in [eye, flip_x, flip_y, flip_xy, flip_yx]:
             for sgn in [1, -1]:
                 transform_idx = self.map_idx + sgn * torch.tensor(f)
                 xy_dist = self.map_idx.unsqueeze(0) - transform_idx.unsqueeze(
@@ -163,6 +164,7 @@ class SOM(object):
         assert fine_act[0] == activations[0]
         assert torch.all(fine_grid[0] == self.map_idx[0])
 
+
         assert fine_act[-1] == activations[-1]
         assert torch.all(fine_grid[-1] == self.map_idx[-1])
 
@@ -170,10 +172,10 @@ class SOM(object):
 
 
 def test():
-    mm = SOM((3, 2, 10), True)
+    mm = SOM((20, 16, 10), True)
     batch_encodings = torch.randint(high=10, size=(60, 10)).float()
     mm.update_batch(batch_encodings)
-    mm.interpolate_activation(.1, batch_encodings[0])
+    mm.interpolate_activation(.01, batch_encodings[0])
 
 
 if __name__ == "__main__":

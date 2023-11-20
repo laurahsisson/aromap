@@ -18,9 +18,11 @@ class IterativeSOM(object):
         if wrapping == som.WrappingMode.TOROIDAL:
             self.use_sphere = False
             self.distance_fn = self.__spherical_distance
-        else:
+        if wrapping == som.WrappingMode.SPHERICAL:
             self.use_sphere = True
             self.distance_fn = self.__spherical_distance
+
+        self.inter_model_distances = self.get_inter_model_distances()
 
     def get_activations(self, encoding):
         # Activation is 1 / Euclidian(models, encoding).
@@ -35,6 +37,41 @@ class IterativeSOM(object):
         # In order to prevent embedding collapse, we select one randomly as the bmu.
         selected = np.random.randint(low=0, high=len(bmu_idxs))
         return bmu_idxs[selected]
+
+    def __spherical_distance(self, p1, p2):
+        eye = [0, 0]
+        flip_x = [self.width, 0]
+        flip_y = [0, self.height]
+        
+        if self.use_sphere:
+            flip_xy = [self.width, self.height]
+            flip_yx = [-self.width, self.height]
+        else:
+            flip_xy = [0,0]
+            flip_yx = [0,0]
+
+        dist_all = []
+        for f in [eye, flip_x, flip_y, flip_xy, flip_yx]:
+            for sgn in [1, -1]:
+                transform_p2 = p2 + sgn * torch.tensor(f)
+                xy_dist = p1 - transform_p2
+                d1 = torch.sqrt(torch.sum(torch.square(xy_dist), dim=-1))
+                dist_all.append(d1)
+                
+        return min(dist_all)
+
+    def __flat_distance(self, p1, p2):
+        xy_dist = p1 - p2
+        return torch.sqrt(torch.sum(torch.square(xy_dist), dim=-1))
+
+
+    def get_inter_model_distances(self):
+        distances = torch.empty((len(self.map_idx), len(self.map_idx)))
+        for i, p1 in enumerate(self.map_idx):
+            for j, p2 in enumerate(self.map_idx):
+                distances[i][j] = self.distance_fn(p1, p2)
+        return distances
+
 
     def mean_encoding_by_bmu(self, batch_encodings, bmus):
         sum_mj = torch.zeros(self.models.shape)
@@ -51,28 +88,6 @@ class IterativeSOM(object):
                 x_mj[i] = torch.zeros(sm.shape)
 
         return x_mj
-
-    def __spherical_distance(self, p1, p2):
-        eye = [0, 0]
-        flip_x = [self.width, 0]
-        flip_y = [0, self.height]
-        # To change this to a toroidal SOM, flip_xy should be removed.
-        if self.use_sphere:
-            flip_xy = [self.width, self.height]
-        else:
-            flip_xy = [0,0]
-        dist_all = []
-        for f in [eye, flip_x, flip_y, flip_xy]:
-            for sgn in [1, -1]:
-                transform_p2 = p2 + sgn * torch.tensor(f)
-                xy_dist = p1 - transform_p2
-                d = torch.sqrt(torch.sum(torch.square(xy_dist), dim=-1))
-                dist_all.append(d)
-        return min(dist_all)
-
-    def __flat_distance(self, p1, p2):
-        xy_dist = p1 - p2
-        return torch.sqrt(torch.sum(torch.square(xy_dist), dim=-1))
 
     def update_factor(self):
         uf = torch.empty((len(self.map_idx), len(self.map_idx)))
@@ -109,12 +124,22 @@ class IterativeSOM(object):
 class TestBatchSOM(unittest.TestCase):
 
     def __make_test(self, wrapping):
-        batch_som = som.SOM((2, 1, 10), wrapping)
+        batch_som = som.SOM((3, 3, 10), wrapping,gauss=1)
         iterative = IterativeSOM(batch_som, wrapping)
         batch_encodings = torch.randint(high=10, size=(60, 10)).float()
         # bmus are selected randomly, so we inject them here
         bmus = torch.cat([batch_som.get_bmu(e) for e in batch_encodings])
         return batch_som, iterative, batch_encodings, bmus
+
+    def test_inter_model_distances(self):
+        for wrapping in list(som.WrappingMode):
+            with self.subTest(wrapping=wrapping):
+                batch_som, iterative, batch_encodings, bmus = self.__make_test(
+                    wrapping)
+
+                imd = batch_som.inter_model_distances
+                imd_expected = iterative.inter_model_distances
+                self.assertTrue(torch.isclose(imd, imd_expected).all())
 
     def test_update_factor(self):
         for wrapping in list(som.WrappingMode):
