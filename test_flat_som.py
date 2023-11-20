@@ -51,7 +51,7 @@ class SOM__(object):
                     torch.neg(torch.div(d.square(), 2 * self.gauss**2)))
         return uf
 
-    def batch_sum_encodings__(self, bmus, encodings):
+    def batch_update_step__(self, bmus, encodings):
         h_ij = self.update_factor__()
         x_mj = self.mean_encoding_by_bmu__(encodings, bmus)
 
@@ -77,7 +77,7 @@ class SOM__(object):
 class TestBatchSOM(unittest.TestCase):
 
     def setUp(self):
-        self.mm = som.SOM(3, 2, 10, False)
+        self.mm = som.SOM((3, 2, 10), False)
         self.mm__ = SOM__(self.mm)
         self.encodings = torch.randint(high=10, size=(60, 10)).float()
         # self.bmus are selected randomly, so we inject them here
@@ -101,9 +101,9 @@ class TestBatchSOM(unittest.TestCase):
         x_mj__ = self.mm__.mean_encoding_by_bmu__(self.encodings, self.bmus)
         self.assertTrue(torch.isclose(x_mj, x_mj__).all())
 
-    def test_batch_sum_encodings(self):
-        bse = self.mm.batch_sum_encodings(self.bmus, self.encodings)
-        bse__ = self.mm__.batch_sum_encodings__(self.bmus, self.encodings)
+    def test_batch_update_step(self):
+        bse = self.mm.batch_update_step(self.bmus, self.encodings)
+        bse__ = self.mm__.batch_update_step__(self.bmus, self.encodings)
         self.assertTrue(torch.isclose(bse, bse__).all())
 
 

@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-
+import scipy
 
 def flatten(mtrx):
     return mtrx.reshape((mtrx.shape[0] * mtrx.shape[1], -1)).squeeze()
@@ -21,13 +21,16 @@ def get_idx_grid(width, height, step):
 class SOM(object):
 
     def __init__(self,
-                 width,
-                 height,
-                 dim,
+                 shape,
                  is_cyclic,
                  gauss=10,
                  decay=.99,
                  use_onehot=True):
+
+        if not hasattr(shape, '__len__') or len(shape) != 3:
+            raise TypeError(f"Expected a shape of (width, height, dimension) but got {shape}")
+
+        width, height, dim = shape
         if use_onehot:
             # Select a random index to use as the hot element.
             idxs = torch.randint(low=0, high=dim, size=(width, height))
@@ -47,8 +50,7 @@ class SOM(object):
         self.map_idx = get_idx_grid(width, height, 1)
 
         if is_cyclic:
-            self.inter_model_distances = self.__get_cyclic_distances(
-                width, height)
+            self.inter_model_distances = self.__get_cyclic_distances()
         else:
             self.inter_model_distances = self.__get_flat_distances()
 
@@ -95,14 +97,14 @@ class SOM(object):
         xy_dist = self.map_idx.unsqueeze(0) - self.map_idx.unsqueeze(1)
         return torch.sqrt(torch.sum(torch.square(xy_dist), dim=-1))
 
-    def __get_cyclic_distances(self, w, h):
+    def __get_cyclic_distances(self):
         # This is only computed once, so we could cache it if we wanted.
         # Distance from each node to every other node
         eye = [0, 0]
-        flip_x = [w, 0]
-        flip_y = [0, h]
-        # Results look better when map is on a torus, if we wanted a sphere this should be [w,h]
-        flip_xy = eye
+        flip_x = [self.width, 0]
+        flip_y = [0, self.height]
+        # To change this to a toroidal SOM, flip_xy should be removed.
+        flip_xy = [self.width,self.height]
         dist_all = []
         for f in [eye, flip_x, flip_y, flip_xy]:
             for sgn in [1, -1]:
@@ -120,9 +122,9 @@ class SOM(object):
                 torch.div(self.inter_model_distances.square(),
                           2 * self.gauss**2)))
 
-    def batch_sum_encodings(self, bmus, encodings):
+    def batch_update_step(self, bmus, encodings):
         # Although this is referred to as h_ji in the paper
-        # it is symmetric (so h[j][i] == h[i][j])
+        # it is symmetric (so self.height[j][i] == self.height[i][j])
         h_ij = self.update_factor()
         x_mj = self.mean_encoding_by_bmu(encodings, bmus)
 
@@ -137,15 +139,31 @@ class SOM(object):
     def update_batch(self, encodings):
         # This step is not vectorized, but we could do a random partitioning or something above.
         bmus = torch.cat([self.get_bmu(e) for e in encodings])
-        self.models = torch.nn.functional.normalize(self.batch_sum_encodings(
-            bmus, encodings),
-                                                    dim=-1)
+        updated_models = self.batch_update_step(bmus, encodings)
+        self.models = torch.nn.functional.normalize(updated_models,dim=-1)
+
+    def interpolate_activation(self,step,encoding,method="linear"):
+        activations = self.get_activations(encoding)
+        fine_grid = get_idx_grid(self.width,self.height,step)
+        assert len(activations.shape) == 1
+        fine_act = scipy.interpolate.griddata(self.map_idx.numpy(),activations.numpy(),fine_grid.numpy(),method=method)
+        assert fine_act[0] == activations[0]
+        assert torch.all(fine_grid[0] == self.map_idx[0])
+        
+        assert fine_act[-1] == activations[-1]
+        assert torch.all(fine_grid[-1] == self.map_idx[-1])
+        
+        return fine_grid, torch.FloatTensor(fine_act)
+    
+# fidx,fa = interpolate_activation(.1,all_activations[0])
+# fidx.shape,fa.shape
 
 
 def test():
-    mm = SOM(3, 2, 10, True)
+    mm = SOM((3, 2, 10), True)
     encodings = torch.randint(high=10, size=(60, 10)).float()
     mm.update_batch(encodings)
+    mm.interpolate_activation(.1,encodings[0])
 
 
 if __name__ == "__main__":
