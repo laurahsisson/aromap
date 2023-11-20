@@ -4,7 +4,7 @@ import unittest
 
 
 # Testing by using an iterative implementation.
-class SOM__(object):
+class IterativeSOM(object):
 
     def __init__(self, som, is_cyclic):
         self.models = som.models
@@ -17,8 +17,6 @@ class SOM__(object):
             self.distance_fn = self.__cyclic_distance
         else:
             self.distance_fn = self.__flat_distance
-
-
 
 
     def get_activations(self, encoding):
@@ -35,7 +33,7 @@ class SOM__(object):
         selected = np.random.randint(low=0, high=len(bmu_idxs))
         return bmu_idxs[selected]
 
-    def mean_encoding_by_bmu__(self, encodings, bmus):
+    def mean_encoding_by_bmu(self, encodings, bmus):
         sum_mj = torch.zeros(self.models.shape)
         count_mj = torch.zeros(self.models.shape[0])
         for i, v_idx in enumerate(bmus):
@@ -70,7 +68,7 @@ class SOM__(object):
         xy_dist = p1 - p2
         return torch.sqrt(torch.sum(torch.square(xy_dist), dim=-1))
 
-    def update_factor__(self):
+    def update_factor(self):
         uf = torch.empty((len(self.map_idx), len(self.map_idx)))
         for i, p1 in enumerate(self.map_idx):
             for j, p2 in enumerate(self.map_idx):
@@ -79,9 +77,9 @@ class SOM__(object):
                     torch.neg(torch.div(d.square(), 2 * self.gauss**2)))
         return uf
 
-    def batch_update_step__(self, bmus, encodings):
-        h_ij = self.update_factor__()
-        x_mj = self.mean_encoding_by_bmu__(encodings, bmus)
+    def batch_update_step(self, bmus, encodings):
+        h_ij = self.update_factor()
+        x_mj = self.mean_encoding_by_bmu(encodings, bmus)
 
         bmu_count_by_idx = torch.zeros(self.models.shape[0])
         for i, v_idx in enumerate(bmus):
@@ -103,37 +101,52 @@ class SOM__(object):
 
 
 class TestBatchSOM(unittest.TestCase):
+    def __make_test(self,is_cyclic):
+        batch_som = som.SOM((2, 1, 10), is_cyclic)
+        iterative = IterativeSOM(batch_som,is_cyclic)
+        encodings = torch.randint(high=10, size=(60, 10)).float()
+        # bmus are selected randomly, so we inject them here
+        bmus = torch.cat([batch_som.get_bmu(e) for e in encodings])
+        return batch_som, iterative, encodings, bmus
 
-    def setUp(self):
-        self.mm = som.SOM((2, 1, 10), True)
-        self.mm__ = SOM__(self.mm,True)
-        self.encodings = torch.randint(high=10, size=(60, 10)).float()
-        # self.bmus are selected randomly, so we inject them here
-        self.bmus = torch.cat([self.mm.get_bmu(e) for e in self.encodings])
-
-        self.assertTrue(torch.all(self.mm.models == self.mm__.models))
 
     def test_update_factor(self):
-        h_ij = self.mm.update_factor()
-        h_ij__ = self.mm__.update_factor__()
-        self.assertTrue(torch.isclose(h_ij, h_ij__).all())
+        for is_cyclic in [True,False]:
+            with self.subTest(is_cyclic=is_cyclic):
+                batch_som, iterative, encodings, bmus = self.__make_test(is_cyclic)
+                
+                h_ij = batch_som.update_factor()
+                h_ij_expected = iterative.update_factor()
+                self.assertTrue(torch.isclose(h_ij, h_ij_expected).all())
 
     def test_update_factor_symmetric(self):
-        h_ij__ = self.mm__.update_factor__()
-        for i in range(len(h_ij__)):
-            for j in range(len(h_ij__)):
-                self.assertEqual(h_ij__[i][j], h_ij__[j][i])
+        for is_cyclic in [True,False]:
+            with self.subTest(is_cyclic=is_cyclic):
+                batch_som, iterative, encodings, bmus = self.__make_test(is_cyclic)
+
+                h_ij = batch_som.update_factor()
+                h_ij_expected = iterative.update_factor()
+                for i in range(len(h_ij_expected)):
+                    for j in range(len(h_ij_expected)):
+                        self.assertEqual(h_ij_expected[i][j], h_ij_expected[j][i])
 
     def test_mean_encoding_by_bmu(self):
-        x_mj = self.mm.mean_encoding_by_bmu(self.encodings, self.bmus)
-        x_mj__ = self.mm__.mean_encoding_by_bmu__(self.encodings, self.bmus)
-        self.assertTrue(torch.isclose(x_mj, x_mj__).all())
+        for is_cyclic in [True,False]:
+            with self.subTest(is_cyclic=is_cyclic):
+                batch_som, iterative, encodings, bmus = self.__make_test(is_cyclic)
+
+                x_mj = batch_som.mean_encoding_by_bmu(encodings, bmus)
+                x_mj_expected = iterative.mean_encoding_by_bmu(encodings, bmus)
+                self.assertTrue(torch.isclose(x_mj, x_mj_expected).all())
 
     def test_batch_update_step(self):
-        bse = self.mm.batch_update_step(self.bmus, self.encodings)
-        bse__ = self.mm__.batch_update_step__(self.bmus, self.encodings)
-        self.assertTrue(torch.isclose(bse, bse__).all())
+        for is_cyclic in [True,False]:
+            with self.subTest(is_cyclic=is_cyclic):
+                batch_som, iterative, encodings, bmus = self.__make_test(is_cyclic)
 
+                bse = batch_som.batch_update_step(bmus, encodings)
+                bse_expected = iterative.batch_update_step(bmus, encodings)
+                self.assertTrue(torch.isclose(bse, bse_expected).all())
 
 if __name__ == '__main__':
     unittest.main()
