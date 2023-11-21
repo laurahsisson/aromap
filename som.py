@@ -35,7 +35,7 @@ class SOM(object):
         self.decay = decay
 
         self.models = utils.flatten(self.models)
-        self.map_idx = utils.get_idx_grid(self.width, self.height, 1)
+        self.map_idx, _ = utils.get_idx_grid(self.width, self.height, 1)
 
         if wrapping == WrappingMode.FLAT:
             self.inter_model_distances = self.__get_flat_distances()
@@ -151,11 +151,10 @@ class SOM(object):
         updated_models = self.batch_update_step(batch_encodings, bmus)
         self.models = torch.nn.functional.normalize(updated_models, dim=-1)
 
-    def interpolate_activation(self, step, encoding, method="linear"):
-        utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
+    def interpolate(self, activations, step, method="linear"):
+        utils.assert_tensor_shape(activations, (self.width*self.height, ), "activations")
 
-        activations = self.get_activations(encoding)
-        fine_grid = utils.get_idx_grid(self.width, self.height, step)
+        fine_grid, fine_shape = utils.get_idx_grid(self.width, self.height, step)
         assert len(activations.shape) == 1
         fine_act = scipy.interpolate.griddata(self.map_idx.numpy(),
                                               activations.numpy(),
@@ -168,14 +167,15 @@ class SOM(object):
         assert fine_act[-1] == activations[-1]
         assert torch.all(fine_grid[-1] == self.map_idx[-1])
 
-        return fine_grid, torch.FloatTensor(fine_act)
+        return fine_grid, torch.FloatTensor(fine_act), fine_shape
 
 
 def test():
     mm = SOM((20, 16, 10), True)
     batch_encodings = torch.randint(high=10, size=(60, 10)).float()
     mm.update_batch(batch_encodings)
-    mm.interpolate_activation(.01, batch_encodings[0])
+    activations = mm.get_activations(batch_encodings[0])
+    mm.interpolate(activations,.01)
 
 
 if __name__ == "__main__":

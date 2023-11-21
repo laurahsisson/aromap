@@ -13,8 +13,9 @@ def get_idx_grid(width, height, step):
                                                step=step),
                                   indexing='ij')
     grid_idx = torch.stack([x_idx, y_idx], dim=-1)
-    return flatten(grid_idx)
 
+    assert x_idx.shape == y_idx.shape
+    return flatten(grid_idx), x_idx.shape
 
 def assert_shape(shape, expected, argname):
     if not shape == expected:
