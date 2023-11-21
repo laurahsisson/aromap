@@ -24,10 +24,21 @@ class IterativeSOM(object):
 
         self.inter_model_distances = self.get_inter_model_distances()
 
-    def get_activations(self, encoding):
-        # Activation is 1 / Euclidian(models, encoding).
+    def get_activations_gauss(self, encoding):
         # The closer a vector is to the encoding, the higher the activation.
-        return 1 / (self.models - encoding).square().sum(dim=-1).sqrt()
+        activations = torch.zeros(len(self.models))
+        for i,model in enumerate(self.models):
+            sqr_dist = (model - encoding).square().sum(dim=-1)
+            activations[i] = torch.exp(torch.neg(sqr_dist))
+        return activations
+
+    def get_activations_tanh(self,encoding):
+        activations = torch.zeros(len(self.models))
+        for i,model in enumerate(self.models):
+            dist = (model - encoding).square().sum(dim=-1).sqrt()
+            activations[i] = 1 - tanh(dist)
+        return activations
+
 
     def get_bmu(self, encoding):
         actvtn = self.get_activations(encoding)

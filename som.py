@@ -8,7 +8,7 @@ WrappingMode = enum.Enum('WrappingMode', ['FLAT', 'TOROIDAL', 'SPHERICAL'])
 
 class SOM(object):
 
-    def __init__(self, shape, wrapping, gauss=10, decay=.99, use_onehot=True):
+    def __init__(self, shape, wrapping, gauss=10, decay=.99, use_onehot=True, clip_models=True, use_tanh=False):
 
         if not hasattr(shape, '__len__') or len(shape) != 3:
             raise TypeError(
@@ -27,12 +27,11 @@ class SOM(object):
             self.models = torch.nn.functional.one_hot(
                 idxs, num_classes=self.dim).float()
         else:
-            self.models = torch.nn.functional.normalize(
-                torch.rand(size=(self.width, self.height, self.dim)).float(),
-                dim=-1)
+            self.models = torch.rand(size=(self.width, self.height, self.dim)).float()
 
         self.gauss = gauss
         self.decay = decay
+        self.clip_models = clip_models
 
         self.models = utils.flatten(self.models)
         self.map_idx, _ = utils.get_idx_grid(self.width, self.height, 1)
@@ -42,6 +41,14 @@ class SOM(object):
         else:
             self.inter_model_distances = self.__get_cyclic_distances(wrapping)
 
+        if self.clip_models:
+            self.models = torch.nn.functional.normalize(self.models,dim=-1)
+
+        if use_tanh:
+            self.get_activations = self.get_activations_tanh
+        else:
+            self.get_activations = self.get_activations_gauss
+
     def do_decay(self):
         # From the author:
         # For large SOMs, the final value of σ may be on the order of five per cent of the shorter side of the grid.
@@ -50,12 +57,21 @@ class SOM(object):
         self.gauss *= self.decay
         self.gauss = max(self.gauss, min_gauss)
 
-    def get_activations(self, encoding):
+    def get_activations_gauss(self, encoding):
         utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
 
-        # Activation is 1 / Euclidian(models, encoding).
-        # The closer a vector is to the encoding, the higher the activation.
-        return 1 / (self.models - encoding).square().sum(dim=-1).sqrt()
+        # Using a gaussian distribution so that dist of 0 has
+        # activation of 1, and all activations are > 0.
+        sqr_dists = (self.models - encoding).square().sum(dim=-1)
+        return torch.exp(torch.neg(sqr_dists))
+
+    def get_activations_tanh(self,encoding):
+        utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
+
+        # Tanh function where x = 0 has y = 1 and approaches 0 asymptotically.
+        dists = (self.models - encoding).square().sum(dim=-1).sqrt()
+        # There will never be a negative distance.
+        return 1 - torch.tanh(dists)
 
     def get_enc_dists(self, encoding):
         utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
@@ -71,9 +87,8 @@ class SOM(object):
         # Especially at the beginning of training, there may be a larger amount
         # of models that are equidistant to the encoding.
         bmu_idxs = (actvtn == torch.max(actvtn)).nonzero()
-        # In order to prevent embedding collapse, we select one randomly as the bmu.
+        # In order to prevent embedding collapse, we select one candidate BMU randomly.
         selected = np.random.randint(low=0, high=len(bmu_idxs))
-        # print(bmu_idxs,bmu_idxs[selected])
         return bmu_idxs[selected]
 
     def get_bmu_pos(self, encoding):
@@ -149,7 +164,9 @@ class SOM(object):
         # This step is not vectorized, but we could do a random partitioning or something above.
         bmus = torch.cat([self.get_bmu(e) for e in batch_encodings])
         updated_models = self.batch_update_step(batch_encodings, bmus)
-        self.models = torch.nn.functional.normalize(updated_models, dim=-1)
+        self.models = updated_models
+        if self.clip_models:
+            self.models = torch.nn.functional.normalize(self.models,dim=-1)
 
     def interpolate(self, activations, step, method="linear"):
         utils.assert_tensor_shape(activations, (self.width*self.height, ), "activations")
