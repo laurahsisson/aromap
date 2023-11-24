@@ -74,6 +74,25 @@ class SOM(object):
         utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
         return self.__get_activations(self.models,encoding)
 
+    def __get_bmu(self,actvtn):
+        # Especially at the beginning of training, there may be a larger amount
+        # of models that are equidistant to the encoding.
+        bmu_idxs = (actvtn == torch.max(actvtn)).nonzero()
+        # In order to prevent embedding collapse, we select one candidate BMU randomly.
+        selected = np.random.randint(low=0, high=len(bmu_idxs))
+        return bmu_idxs[selected]
+
+    def get_bmu(self, encoding):
+        utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
+
+        actvtn = self.get_activations(encoding)
+        return self.__get_bmu(actvtn)
+
+    def get_bmu_pos(self, encoding):
+        utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
+
+        return self.map_idx[self.get_bmu(encoding)]
+
     def __get_cyclic_grid(self):
         eye = [0, 0]
         flip_x = [self.width, 0]
@@ -127,23 +146,9 @@ class SOM(object):
 
         fine_act = self.__get_activations(fine_models,encoding)
 
-        return fine_grid, fine_act, fine_shape
+        fine_bmu_pos = fine_grid[self.__get_bmu(fine_act)].squeeze()
 
-    def get_bmu(self, encoding):
-        utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
-
-        actvtn = self.get_activations(encoding)
-        # Especially at the beginning of training, there may be a larger amount
-        # of models that are equidistant to the encoding.
-        bmu_idxs = (actvtn == torch.max(actvtn)).nonzero()
-        # In order to prevent embedding collapse, we select one candidate BMU randomly.
-        selected = np.random.randint(low=0, high=len(bmu_idxs))
-        return bmu_idxs[selected]
-
-    def get_bmu_pos(self, encoding):
-        utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
-
-        return self.map_idx[self.get_bmu(encoding)]
+        return fine_grid, fine_act, fine_shape, fine_bmu_pos
 
     def __mean_encoding_by_bmu(self, batch_encodings, bmus):
         utils.assert_tensor_shape(batch_encodings,
@@ -199,7 +204,8 @@ def test():
     batch_encodings = torch.randint(high=10, size=(60, 10)).float()
     mm.update_batch(batch_encodings)
     act = mm.get_activations(batch_encodings[0])
-    igrid,iact,ishape = mm.get_interpolated_activations(batch_encodings[0],.01)
+    igrid,iact,ishape,fbpos = mm.get_interpolated_activations(batch_encodings[0],.01)
+    print(igrid.shape,iact.shape,ishape,fbpos)
 
 if __name__ == "__main__":
     test()
