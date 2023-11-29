@@ -187,13 +187,51 @@ class SOM(object):
         return torch.mm(weighted_h_ji, x_mj) / weighted_h_ji.sum(dim=-1,
                                                                  keepdim=True)
 
-    def update_batch(self, batch_encodings):
+    def get_bmus(self,batch_encodings):
         utils.assert_tensor_shape(batch_encodings,
                                   (batch_encodings.shape[0], self.dim),
                                   "batch_encodings")
 
         # This step is not vectorized, but we could do a random partitioning or something above.
-        bmus = torch.cat([self.get_bmu(e) for e in batch_encodings])
+        return torch.cat([self.get_bmu(e) for e in batch_encodings])
+
+    def __quantization_loss(self,batch_encodings,bmus):
+        bmu_models = self.models[bmus]
+        return torch.sum(1-self.__get_activations(bmu_models, batch_encodings))
+
+    def __get_kmu_batch(self,batch_activations,k=1):
+        # Because early in traing, there may be multiple best matching units
+        # and also different activations may match to a single bmu.
+        # To resolve this, we permute the indices of the activations (and thus matching units)
+        # row by row. This ensures that the activations do not all use the same bmu.
+        # Assuming batch_acivations.shape is consistent, we can do this once ahead of time.
+        permuted_indices = torch.stack([torch.randperm(batch_activations.shape[1]) for _ in range(batch_activations.shape[0])])
+        # Permute the activations using the new indices
+        permuted_activations = torch.gather(batch_activations,1,permuted_indices)
+        # Find the topk activations for each row
+        _, top_1tok_indices = torch.topk(permuted_activations,k)
+        # We want to find exactly the kth (assuming 1 based indexing) element.
+        k_indices = top_1tok_indices[:,k-1]
+        # Return the original indices from the permuted indices.
+        return permuted_indices[torch.arange(permuted_indices.size(0)), k_indices]
+
+    def __topographic_loss(self,batch_encodings,bmus):
+        batch_activations = torch.stack([self.get_activations(enc) for enc in batch_encodings])
+        # Get the index of second best matching unit
+        next_matching_units = self.__get_kmu_batch(batch_activations,k=2)
+        # Index into our precalculated model distance matrix
+        bmu_nmu_distance = self.inter_model_distances[bmus,next_matching_units]
+        # Topographic loss is sum of all bmu to nmu distances
+        return torch.sum(bmu_nmu_distance)
+
+    def loss(self,batch_encodings):
+        bmus = self.get_bmus(batch_encodings)
+        ql = self.__quantization_loss(batch_encodings,bmus)
+        tl = self.__topographic_loss(batch_encodings,bmus)
+        return {"loss":ql+tl,"quantization":ql,"topographic":tl}
+
+    def update_batch(self, batch_encodings):
+        bmus = self.get_bmus(batch_encodings)
         updated_models = self.batch_update_step(batch_encodings, bmus)
         self.models = updated_models
         if self.clip_models:
@@ -201,11 +239,12 @@ class SOM(object):
 
 def test():
     mm = SOM((3, 2, 10), True)
-    batch_encodings = torch.randint(high=10, size=(60, 10)).float()
-    mm.update_batch(batch_encodings)
-    act = mm.get_activations(batch_encodings[0])
-    igrid,iact,ishape,fbpos = mm.get_interpolated_activations(batch_encodings[0],.01)
-    print(igrid.shape,iact.shape,ishape,fbpos)
+    batch_encodings = torch.randint(high=10, size=(2, 10)).float()
+    # mm.update_batch(batch_encodings)
+    # act = mm.get_activations(batch_encodings[0])
+    # igrid,iact,ishape,fbpos = mm.get_interpolated_activations(batch_encodings[0],.01)
+    # print(igrid.shape,iact.shape,ishape,fbpos)
+    print(mm.loss(batch_encodings))
 
 if __name__ == "__main__":
     test()
