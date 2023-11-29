@@ -6,44 +6,38 @@ import itertools
 # Testing by using an iterative implementation.
 class IterativeSOM(object):
 
-    def __init__(self, iterative, wrapping):
+    def __init__(self, iterative):
         self.iterative = iterative
 
-        if wrapping == som.WrappingMode.FLAT:
+        if self.iterative.wrapping == som.WrappingMode.FLAT:
             self.distance_fn = self.__flat_distance
-        if wrapping == som.WrappingMode.TOROIDAL:
+        if self.iterative.wrapping == som.WrappingMode.TOROIDAL:
             self.use_sphere = False
             self.distance_fn = self.__spherical_distance
-        if wrapping == som.WrappingMode.SPHERICAL:
+        if self.iterative.wrapping == som.WrappingMode.SPHERICAL:
             self.use_sphere = True
             self.distance_fn = self.__spherical_distance
 
         self.inter_model_distances = self.get_inter_model_distances()
 
-    def get_activations_gauss(self, models, encoding):
-        # The closer a vector is to the encoding, the higher the activation.
-        activations = torch.zeros(len(models))
-        for i,model in enumerate(models):
-            sqr_dist = (model - encoding).square().sum(dim=-1)
-            activations[i] = torch.exp(torch.neg(sqr_dist))
-        return activations
-
-    def get_activations_tanh(self,models, encoding):
-        activations = torch.zeros(len(models))
-        for i,model in enumerate(models):
+    def __inverse_distance(self,encoding):
+        activations = torch.zeros(len(self.iterative.models))
+        for i,model in enumerate(self.iterative.models):
             dist = (model - encoding).square().sum(dim=-1).sqrt()
-            activations[i] = 1 - tanh(dist)
+            activations[i] = 1 / dist
         return activations
 
-    def __get_activations(self,models,encoding):
-        if self.iterative.use_tanh:
-            return get_activations_tanh(models,encoding)
-        else:
-            return get_activations_gauss(models,encoding)
+    def __similarity(self,encoding):
+        activations = torch.zeros(len(self.iterative.models))
+        for i,model in enumerate(self.iterative.models):
+            activations[i] = torch.nn.functional.cosine_similarity(model,encoding,dim=-1)
+        return activations
 
     def get_activations(self,encoding):
-        utils.assert_tensor_shape(encoding, (self.iterative.dim, ), "encoding")
-        return self.__get_activations(self.iterative.models,encoding)
+        if self.iterative.activation == som.ActivationMode.INVERSE_DISTANCE:
+            return self.__inverse_distance(encoding)
+        else:
+            return self.__similarity(encoding)
 
     def get_bmu(self, encoding):
         actvtn = self.get_activations(encoding)
@@ -140,22 +134,32 @@ class IterativeSOM(object):
 class TestBatchSOM(unittest.TestCase):
 
     def __make_test(self, trial):
-        batch_som = som.SOM((3, 3, 10), trial["wrapping"], gauss=1, use_tanh=trial["use_tanh"])
-        iterative = IterativeSOM(batch_som, trial["wrapping"])
+        batch_som = som.SOM((3, 3, 10), trial["wrapping"], trial["activation"], gauss=1)
+        iterative = IterativeSOM(batch_som)
         batch_encodings = torch.randint(high=10, size=(60, 10)).float()
         # bmus are selected randomly, so we inject them here
         bmus = torch.cat([batch_som.get_bmu(e) for e in batch_encodings])
         return batch_som, iterative, batch_encodings, bmus
 
     def get_all_trials(self):
-        trial_values = {"wrapping":list(som.WrappingMode),"use_tanh":[True,False]}
+        trial_values = {"wrapping":list(som.WrappingMode),"activation":list(som.ActivationMode)}
         keys, values = zip(*trial_values.items())
         return [dict(zip(keys, v)) for v in itertools.product(*values)]
+
+    def test_get_activations(self):
+        for trial in self.get_all_trials():
+            with self.subTest(trial=trial):    
+                batch_som, iterative, _, _ = self.__make_test(trial)
+
+                encodings = torch.randint(high=10, size=(10,)).float()
+                actvn = batch_som.get_activations(encodings)
+                actvn_expected = iterative.get_activations(encodings)
+                self.assertTrue(torch.isclose(actvn,actvn_expected).all())
 
     def test_inter_model_distances(self):
         for trial in self.get_all_trials():
             with self.subTest(trial=trial):
-                batch_som, iterative, batch_encodings, bmus = self.__make_test(
+                batch_som, iterative, _, _ = self.__make_test(
                     trial)
 
                 imd = batch_som.inter_model_distances
@@ -165,7 +169,7 @@ class TestBatchSOM(unittest.TestCase):
     def test_update_factor(self):
         for trial in self.get_all_trials():
             with self.subTest(trial=trial):
-                batch_som, iterative, batch_encodings, bmus = self.__make_test(
+                batch_som, iterative, _, _ = self.__make_test(
                     trial)
 
                 h_ij = batch_som.update_factor()
@@ -175,7 +179,7 @@ class TestBatchSOM(unittest.TestCase):
     def test_update_factor_symmetric(self):
         for trial in self.get_all_trials():
             with self.subTest(trial=trial):
-                batch_som, iterative, batch_encodings, bmus = self.__make_test(
+                batch_som, iterative, _, _ = self.__make_test(
                     trial)
 
                 h_ij = batch_som.update_factor()
