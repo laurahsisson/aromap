@@ -5,10 +5,11 @@ import utils
 import enum
 
 WrappingMode = enum.Enum('WrappingMode', ['FLAT', 'TOROIDAL', 'SPHERICAL'])
+ActivationMode = enum.Enum('ActivationMode', ['INVERSE_DISTANCE', 'SIMILARITY'])
 
 class SOM(object):
 
-    def __init__(self, shape, wrapping, gauss=10, decay=.99, use_onehot=True, clip_models=True, use_tanh=False):
+    def __init__(self, shape, wrapping, activation, gauss=10, decay=.99):
 
         if not hasattr(shape, '__len__') or len(shape) != 3:
             raise TypeError(
@@ -18,20 +19,11 @@ class SOM(object):
         self.shape = shape
         self.width, self.height, self.dim = shape
 
-        if use_onehot:
-            # Select a random index to use as the hot element.
-            idxs = torch.randint(low=0,
-                                 high=self.dim,
-                                 size=(self.width, self.height))
-            # Convert to one hot of shape.
-            self.models = torch.nn.functional.one_hot(
-                idxs, num_classes=self.dim).float()
-        else:
-            self.models = torch.rand(size=(self.width, self.height, self.dim)).float()
+        self.activation = activation
+        self.models = self.__init_models()
 
         self.gauss = gauss
         self.decay = decay
-        self.clip_models = clip_models
 
         self.models = utils.flatten(self.models)
         self.map_idx, _ = utils.get_idx_grid(self.width, self.height, 1)
@@ -39,10 +31,6 @@ class SOM(object):
         self.wrapping = wrapping
         self.inter_model_distances = self.__get_inter_model_distances()
 
-        if self.clip_models:
-            self.models = torch.nn.functional.normalize(self.models,dim=-1)
-
-        self.use_tanh = use_tanh
 
     def do_decay(self):
         # From the author:
@@ -52,26 +40,39 @@ class SOM(object):
         self.gauss *= self.decay
         self.gauss = max(self.gauss, min_gauss)
 
-    def __get_activations_gauss(self,models,encoding):
-        # Using a gaussian distribution so that dist of 0 has
-        # activation of 1, and all activations are > 0.
-        sqr_dists = (models - encoding).square().sum(dim=-1)
-        return torch.exp(torch.neg(sqr_dists))
+    def __init_models(self):
+        if self.activation == ActivationMode.INVERSE_DISTANCE:
+            return torch.rand(size=(self.width, self.height, self.dim)).float()
+        else:
+            # Select a random index to use as the one-hot element.
+            idxs = torch.randint(low=0,
+                                 high=self.dim,
+                                 size=(self.width, self.height))
+            # Convert to one hot of shape.
+            return torch.nn.functional.one_hot(
+                idxs, num_classes=self.dim).float()
 
-    def __get_activations_tanh(self,models,encoding):
-        # Tanh function where x = 0 has y = 1 and approaches 0 asymptotically.
-        dists = (models - encoding).square().sum(dim=-1).sqrt()
-        # There will never be a negative distance.
-        return 1 - torch.tanh(dists)
+    def __cosine_similarity_matrix(self,m1, m2):
+        # Normalize the rows of m1 and m2
+        m1_normalized = m1 / torch.norm(m1, dim=1, keepdim=True)
+        m2_normalized = m2 / torch.norm(m2, dim=1, keepdim=True)
+
+        # Compute the dot product between each pair of normalized rows
+        similarity_matrix = torch.matmul(m1_normalized, m2_normalized.t())
+
+        return similarity_matrix
+
+    def __get_batch_activations(self,models,batch_encodings):
+        if self.activation == ActivationMode.INVERSE_DISTANCE:
+            return 1 / torch.cdist(batch_encodings,models)
+        else: 
+            return self.__cosine_similarity_matrix(batch_encodings,models)
 
     def __get_activations(self,models,encoding):
-        if self.use_tanh:
-            return self.__get_activations_tanh(models,encoding)
-        else:
-            return self.__get_activations_gauss(models,encoding)
+        utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
+        return self.__get_batch_activations(models,encoding.unsqueeze(0)).squeeze()
 
     def get_activations(self,encoding):
-        utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
         return self.__get_activations(self.models,encoding)
 
     def __get_bmu(self,actvtn):
@@ -125,6 +126,7 @@ class SOM(object):
         utils.assert_tensor_shape(encoding, (self.dim, ), "encoding")
 
         # For interpolation, we need to take into account the wrapped positions of the models
+        # So the expensive grid wrapping operation needs to be recalculated.
         wrapped_idx, wrapped_models = self.__get_wrapped_grid()
         wrapped_idx = utils.flatten(wrapped_idx)
         wrapped_models = utils.flatten(wrapped_models)
@@ -197,7 +199,7 @@ class SOM(object):
 
     def __quantization_loss(self,batch_encodings,bmus):
         bmu_models = self.models[bmus]
-        return torch.sum(1-self.__get_activations(bmu_models, batch_encodings))
+        return torch.sum(1-self.__get_batch_activations(bmu_models, batch_encodings))
 
     def __get_kmu_batch(self,batch_activations,k=1):
         # Because early in traing, there may be multiple best matching units
@@ -234,16 +236,14 @@ class SOM(object):
         bmus = self.get_bmus(batch_encodings)
         updated_models = self.batch_update_step(batch_encodings, bmus)
         self.models = updated_models
-        if self.clip_models:
-            self.models = torch.nn.functional.normalize(self.models,dim=-1)
 
 def test():
-    mm = SOM((3, 2, 10), True)
+    mm = SOM((3, 2, 10), WrappingMode.FLAT,ActivationMode.SIMILARITY)
     batch_encodings = torch.randint(high=10, size=(2, 10)).float()
-    # mm.update_batch(batch_encodings)
-    # act = mm.get_activations(batch_encodings[0])
-    # igrid,iact,ishape,fbpos = mm.get_interpolated_activations(batch_encodings[0],.01)
-    # print(igrid.shape,iact.shape,ishape,fbpos)
+    mm.update_batch(batch_encodings)
+    act = mm.get_activations(batch_encodings[0])
+    igrid,iact,ishape,fbpos = mm.get_interpolated_activations(batch_encodings[0],.01)
+    print(f"Interpolated Grid Shape: {igrid.shape} \nInterpolated Activation Shape: {iact.shape} \nInterpolated Matrix Shape: {ishape} \nInterpolated BMU Position: {fbpos}")
     print(mm.loss(batch_encodings))
 
 if __name__ == "__main__":
